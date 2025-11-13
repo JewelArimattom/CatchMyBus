@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: catchmybus-backend
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      # Add your Firebase credentials as environment variables in Render dashboard:
+      # FIREBASE_PROJECT_ID
+      # FIREBASE_PRIVATE_KEY
+      # FIREBASE_CLIENT_EMAIL
