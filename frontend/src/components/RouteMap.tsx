@@ -1,5 +1,4 @@
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
-import { Icon } from 'leaflet';
 import { BusResult } from '../types';
 import 'leaflet/dist/leaflet.css';
 
@@ -12,15 +11,10 @@ interface RouteMapProps {
 // Default Kerala center coordinates
 const KERALA_CENTER = { lat: 10.8505, lng: 76.2711 };
 
-const RouteMap = ({ from, to, results }: RouteMapProps) => {
+const RouteMap = ({ from, to }: RouteMapProps) => {
   // Mock coordinates for demonstration - in production, fetch from API
   const fromCoords = { lat: 8.5241, lng: 76.9366 }; // Thiruvananthapuram
   const toCoords = { lat: 9.9312, lng: 76.2673 }; // Kochi
-
-  const busIcon = new Icon({
-    iconUrl: 'https://cdn-icons-png.flaticon.com/512/3448/3448339.png',
-    iconSize: [32, 32],
-  });
 
   return (
     <div className="card p-0 overflow-hidden">

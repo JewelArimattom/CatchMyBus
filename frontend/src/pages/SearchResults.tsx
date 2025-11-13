@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Clock, MapPin, TrendingUp, Heart, AlertCircle, Filter } from 'lucide-react';
+import { ArrowLeft, MapPin, TrendingUp, Heart, AlertCircle, Filter } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../config/api';
 import { BusResult } from '../types';

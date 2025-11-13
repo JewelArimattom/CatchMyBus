@@ -8,19 +8,21 @@ router.post('/buses', async (req: Request, res: Response) => {
   try {
     console.log('📝 Received bus data:', req.body);
     
-    const { busNumber, busName, type, route } = req.body;
+    const { busName, from, via, to, type, route, timings } = req.body;
 
-    if (!busNumber || !busName || !type || !route) {
+    if (!busName || !from || !to || !type || !route || !timings) {
       console.error('❌ Missing required fields');
-      return res.status(400).json({ error: 'All fields are required' });
+      return res.status(400).json({ error: 'All required fields must be filled' });
     }
 
     const busData = {
-      busNumber,
       busName,
+      from,
+      via: via || '', // via is optional
+      to,
       type,
       route: Array.isArray(route) ? route : [route],
-      timings: [],
+      timings: Array.isArray(timings) ? timings : [],
       createdAt: new Date(),
     };
 

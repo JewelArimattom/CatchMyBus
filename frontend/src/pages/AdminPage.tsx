@@ -1,16 +1,27 @@
 import { useState } from 'react';
-import { Plus, Bus, MapPin, Clock, Save, AlertCircle } from 'lucide-react';
+import { Plus, Bus, MapPin, Save, AlertCircle, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../config/api';
+
+interface StopTiming {
+  stopName: string;
+  arrivalTime: string;
+  period: 'AM' | 'PM';
+}
 
 const AdminPage = () => {
   const [activeTab, setActiveTab] = useState<'buses' | 'stops'>('buses');
   const [busForm, setBusForm] = useState({
-    busNumber: '',
     busName: '',
+    from: '',
+    via: '',
+    to: '',
     type: 'KSRTC',
-    route: '',
   });
+  const [stopTimings, setStopTimings] = useState<StopTiming[]>([
+    { stopName: '', arrivalTime: '', period: 'AM' }
+  ]);
+  
   const [stopForm, setStopForm] = useState({
     name: '',
     district: '',
@@ -18,12 +29,48 @@ const AdminPage = () => {
     lng: '',
   });
 
+  const addStopTimingField = () => {
+    setStopTimings([...stopTimings, { stopName: '', arrivalTime: '', period: 'AM' }]);
+  };
+
+  const removeStopTimingField = (index: number) => {
+    if (stopTimings.length > 1) {
+      const updated = stopTimings.filter((_, i) => i !== index);
+      setStopTimings(updated);
+    }
+  };
+
+  const updateStopTiming = (index: number, field: 'stopName' | 'arrivalTime' | 'period', value: string) => {
+    const updated = [...stopTimings];
+    if (field === 'period') {
+      updated[index][field] = value as 'AM' | 'PM';
+    } else {
+      updated[index][field] = value;
+    }
+    setStopTimings(updated);
+  };
+
   const handleAddBus = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    // Validate that all stops have names and times
+    const hasEmptyFields = stopTimings.some(st => !st.stopName.trim() || !st.arrivalTime.trim());
+    if (hasEmptyFields) {
+      toast.error('Please fill all stop names and times');
+      return;
+    }
+
     const busData = {
-      ...busForm,
-      route: busForm.route.split(',').map(s => s.trim()),
+      busName: busForm.busName,
+      from: busForm.from,
+      via: busForm.via,
+      to: busForm.to,
+      type: busForm.type,
+      route: stopTimings.map(st => st.stopName.trim()),
+      timings: stopTimings.map(st => ({
+        stop: st.stopName.trim(),
+        time: `${st.arrivalTime} ${st.period}`
+      }))
     };
     
     console.log('Attempting to add bus with data:', busData);
@@ -33,7 +80,8 @@ const AdminPage = () => {
       const response = await api.post('/admin/buses', busData);
       console.log('✅ Bus added successfully:', response.data);
       toast.success('Bus added successfully!');
-      setBusForm({ busNumber: '', busName: '', type: 'KSRTC', route: '' });
+      setBusForm({ busName: '', from: '', via: '', to: '', type: 'KSRTC' });
+      setStopTimings([{ stopName: '', arrivalTime: '', period: 'AM' }]);
     } catch (error: any) {
       console.error('❌ Error adding bus:', error);
       console.error('Error details:', {
@@ -129,37 +177,64 @@ const AdminPage = () => {
               Add New Bus
             </h2>
 
-            <form onSubmit={handleAddBus} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Bus Number *
-                  </label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    placeholder="e.g., KL-01-AB-1234"
-                    value={busForm.busNumber}
-                    onChange={(e) => setBusForm({ ...busForm, busNumber: e.target.value })}
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Bus Name *
-                  </label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    placeholder="e.g., Trivandrum - Kochi Express"
-                    value={busForm.busName}
-                    onChange={(e) => setBusForm({ ...busForm, busName: e.target.value })}
-                    required
-                  />
-                </div>
+            <form onSubmit={handleAddBus} className="space-y-6">
+              {/* Bus Name */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Bus Name *
+                </label>
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="e.g., Trivandrum - Kochi Express"
+                  value={busForm.busName}
+                  onChange={(e) => setBusForm({ ...busForm, busName: e.target.value })}
+                  required
+                />
               </div>
 
+              {/* From → Via → To */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Route Details *
+                </label>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <input
+                      type="text"
+                      className="input-field"
+                      placeholder="From (e.g., Trivandrum)"
+                      value={busForm.from}
+                      onChange={(e) => setBusForm({ ...busForm, from: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      className="input-field"
+                      placeholder="Via (e.g., Kollam)"
+                      value={busForm.via}
+                      onChange={(e) => setBusForm({ ...busForm, via: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      className="input-field"
+                      placeholder="To (e.g., Kochi)"
+                      value={busForm.to}
+                      onChange={(e) => setBusForm({ ...busForm, to: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  From → Via → To (Via is optional)
+                </p>
+              </div>
+
+              {/* Bus Type */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Bus Type *
@@ -178,20 +253,86 @@ const AdminPage = () => {
                 </select>
               </div>
 
+              {/* Stop Name and Time Section */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Route (Comma-separated stops) *
+                <label className="block text-sm font-medium text-gray-700 mb-3">
+                  Stops and Timings *
                 </label>
-                <textarea
-                  className="input-field"
-                  rows={3}
-                  placeholder="e.g., Thiruvananthapuram, Kollam, Alappuzha, Kochi"
-                  value={busForm.route}
-                  onChange={(e) => setBusForm({ ...busForm, route: e.target.value })}
-                  required
-                />
+                
+                <div className="space-y-3">
+                  {stopTimings.map((stopTiming, index) => (
+                    <div key={index} className="flex gap-3 items-start">
+                      {/* Stop Name Input */}
+                      <div className="flex-1">
+                        <input
+                          type="text"
+                          className="input-field"
+                          placeholder="e.g., Thiruvananthapuram Central"
+                          value={stopTiming.stopName}
+                          onChange={(e) => updateStopTiming(index, 'stopName', e.target.value)}
+                          required
+                        />
+                      </div>
+
+                      {/* Time Input (12-hour format) */}
+                      <div className="w-32">
+                        <input
+                          type="text"
+                          className="input-field"
+                          placeholder="HH:MM"
+                          value={stopTiming.arrivalTime}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            // Allow only numbers and colon
+                            if (/^[0-9:]*$/.test(value)) {
+                              updateStopTiming(index, 'arrivalTime', value);
+                            }
+                          }}
+                          maxLength={5}
+                          required
+                        />
+                      </div>
+
+                      {/* AM/PM Selector */}
+                      <div className="w-24">
+                        <select
+                          className="input-field"
+                          value={stopTiming.period}
+                          onChange={(e) => updateStopTiming(index, 'period', e.target.value)}
+                          required
+                        >
+                          <option value="AM">AM</option>
+                          <option value="PM">PM</option>
+                        </select>
+                      </div>
+
+                      {/* Remove Button (only show if more than 1 stop) */}
+                      {stopTimings.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeStopTimingField(index)}
+                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Remove stop"
+                        >
+                          <X className="h-5 w-5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Add Stop Button */}
+                <button
+                  type="button"
+                  onClick={addStopTimingField}
+                  className="mt-3 flex items-center gap-2 text-primary-600 hover:text-primary-700 font-medium transition-colors"
+                >
+                  <Plus className="h-5 w-5" />
+                  Add Another Stop
+                </button>
               </div>
 
+              {/* Submit Button */}
               <button type="submit" className="btn-primary w-full">
                 <Save className="h-5 w-5 inline mr-2" />
                 Add Bus
