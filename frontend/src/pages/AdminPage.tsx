@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Plus, Bus, MapPin, Save, AlertCircle, X } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Plus, Bus, MapPin, Save, AlertCircle, X, Edit2, Trash2, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../config/api';
 
@@ -7,6 +7,17 @@ interface StopTiming {
   stopName: string;
   arrivalTime: string;
   period: 'AM' | 'PM';
+}
+
+interface BusData {
+  id: string;
+  busName: string;
+  from: string;
+  via: string;
+  to: string;
+  type: string;
+  route: string[];
+  timings: Array<{ stop: string; time: string }>;
 }
 
 const AdminPage = () => {
@@ -22,11 +33,122 @@ const AdminPage = () => {
     { stopName: '', arrivalTime: '', period: 'AM' }
   ]);
   
-  const [stopForm, setStopForm] = useState({
-    name: '',
-    district: '',
-    lat: '',
-    lng: '',
+  const [allBuses, setAllBuses] = useState<BusData[]>([]);
+  const [editingBus, setEditingBus] = useState<BusData | null>(null);
+  const [isLoadingBuses, setIsLoadingBuses] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Fetch all buses when "Manage Bus" tab is active
+  useEffect(() => {
+    if (activeTab === 'stops') {
+      fetchAllBuses();
+    }
+  }, [activeTab]);
+
+  const fetchAllBuses = async () => {
+    setIsLoadingBuses(true);
+    try {
+      const response = await api.get('/admin/buses');
+      setAllBuses(response.data.data || []);
+    } catch (error) {
+      console.error('Error fetching buses:', error);
+      toast.error('Failed to load buses');
+    } finally {
+      setIsLoadingBuses(false);
+    }
+  };
+
+  const handleEditBus = (bus: BusData) => {
+    setEditingBus(bus);
+    
+    // Parse timings back into form format
+    const parsedTimings: StopTiming[] = bus.timings.map(timing => {
+      const [time, period] = timing.time.split(' ');
+      return {
+        stopName: timing.stop,
+        arrivalTime: time,
+        period: (period as 'AM' | 'PM') || 'AM'
+      };
+    });
+    
+    setBusForm({
+      busName: bus.busName,
+      from: bus.from,
+      via: bus.via || '',
+      to: bus.to,
+      type: bus.type,
+    });
+    setStopTimings(parsedTimings);
+  };
+
+  const handleUpdateBus = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!editingBus) return;
+    
+    const hasEmptyFields = stopTimings.some(st => !st.stopName.trim() || !st.arrivalTime.trim());
+    if (hasEmptyFields) {
+      toast.error('Please fill all stop names and times');
+      return;
+    }
+
+    const busData = {
+      busName: busForm.busName,
+      from: busForm.from,
+      via: busForm.via,
+      to: busForm.to,
+      type: busForm.type,
+      route: stopTimings.map(st => st.stopName.trim()),
+      timings: stopTimings.map(st => ({
+        stop: st.stopName.trim(),
+        time: `${st.arrivalTime} ${st.period}`
+      }))
+    };
+    
+    try {
+      await api.put(`/admin/buses/${editingBus.id}`, busData);
+      toast.success('Bus updated successfully!');
+      setEditingBus(null);
+      setBusForm({ busName: '', from: '', via: '', to: '', type: 'KSRTC' });
+      setStopTimings([{ stopName: '', arrivalTime: '', period: 'AM' }]);
+      fetchAllBuses();
+    } catch (error: any) {
+      console.error('Error updating bus:', error);
+      toast.error(error.response?.data?.error || 'Failed to update bus');
+    }
+  };
+
+  const handleDeleteBus = async (busId: string, busName: string) => {
+    if (!confirm(`Are you sure you want to delete "${busName}"?`)) {
+      return;
+    }
+    
+    try {
+      await api.delete(`/admin/buses/${busId}`);
+      toast.success('Bus deleted successfully!');
+      fetchAllBuses();
+    } catch (error) {
+      console.error('Error deleting bus:', error);
+      toast.error('Failed to delete bus');
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingBus(null);
+    setBusForm({ busName: '', from: '', via: '', to: '', type: 'KSRTC' });
+    setStopTimings([{ stopName: '', arrivalTime: '', period: 'AM' }]);
+  };
+
+  // Filter buses based on search query
+  const filteredBuses = allBuses.filter(bus => {
+    const query = searchQuery.toLowerCase();
+    return (
+      bus.busName.toLowerCase().includes(query) ||
+      bus.from.toLowerCase().includes(query) ||
+      bus.to.toLowerCase().includes(query) ||
+      (bus.via && bus.via.toLowerCase().includes(query)) ||
+      bus.route.some(stop => stop.toLowerCase().includes(query))
+    );
   });
 
   const addStopTimingField = () => {
@@ -102,24 +224,6 @@ const AdminPage = () => {
     }
   };
 
-  const handleAddStop = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      await api.post('/admin/stops', {
-        ...stopForm,
-        location: {
-          lat: parseFloat(stopForm.lat),
-          lng: parseFloat(stopForm.lng),
-        },
-      });
-      toast.success('Bus stop added successfully!');
-      setStopForm({ name: '', district: '', lat: '', lng: '' });
-    } catch (error) {
-      console.error('Error adding stop:', error);
-      toast.error('Failed to add bus stop');
-    }
-  };
-
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="max-w-4xl mx-auto">
@@ -154,7 +258,7 @@ const AdminPage = () => {
             }`}
           >
             <Bus className="h-5 w-5 mr-2" />
-            Manage Buses
+            Add Bus
           </button>
           <button
             onClick={() => setActiveTab('stops')}
@@ -165,18 +269,13 @@ const AdminPage = () => {
             }`}
           >
             <MapPin className="h-5 w-5 mr-2" />
-            Manage Stops
+            Manage Bus
           </button>
         </div>
 
         {/* Bus Form */}
         {activeTab === 'buses' && (
           <div className="card animate-slide-up">
-            <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center">
-              <Plus className="h-6 w-6 mr-2 text-primary-600" />
-              Add New Bus
-            </h2>
-
             <form onSubmit={handleAddBus} className="space-y-6">
               {/* Bus Name */}
               <div>
@@ -343,78 +442,261 @@ const AdminPage = () => {
 
         {/* Stop Form */}
         {activeTab === 'stops' && (
-          <div className="card animate-slide-up">
-            <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center">
-              <Plus className="h-6 w-6 mr-2 text-primary-600" />
-              Add New Bus Stop
-            </h2>
-
-            <form onSubmit={handleAddStop} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Stop Name *
-                </label>
-                <input
-                  type="text"
-                  className="input-field"
-                  placeholder="e.g., Thiruvananthapuram Central"
-                  value={stopForm.name}
-                  onChange={(e) => setStopForm({ ...stopForm, name: e.target.value })}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  District *
-                </label>
-                <input
-                  type="text"
-                  className="input-field"
-                  placeholder="e.g., Thiruvananthapuram"
-                  value={stopForm.district}
-                  onChange={(e) => setStopForm({ ...stopForm, district: e.target.value })}
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Latitude *
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    className="input-field"
-                    placeholder="e.g., 8.5241"
-                    value={stopForm.lat}
-                    onChange={(e) => setStopForm({ ...stopForm, lat: e.target.value })}
-                    required
-                  />
+          <div className="space-y-6 animate-slide-up">
+            {/* Edit Form (if editing) */}
+            {editingBus && (
+              <div className="card">
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className="text-2xl font-bold text-gray-800">Edit Bus</h2>
+                  <button
+                    onClick={handleCancelEdit}
+                    className="text-gray-600 hover:text-gray-800"
+                  >
+                    <X className="h-6 w-6" />
+                  </button>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Longitude *
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    className="input-field"
-                    placeholder="e.g., 76.9366"
-                    value={stopForm.lng}
-                    onChange={(e) => setStopForm({ ...stopForm, lng: e.target.value })}
-                    required
-                  />
-                </div>
-              </div>
+                <form onSubmit={handleUpdateBus} className="space-y-6">
+                  {/* Bus Name */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Bus Name *
+                    </label>
+                    <input
+                      type="text"
+                      className="input-field"
+                      placeholder="e.g., Trivandrum - Kochi Express"
+                      value={busForm.busName}
+                      onChange={(e) => setBusForm({ ...busForm, busName: e.target.value })}
+                      required
+                    />
+                  </div>
 
-              <button type="submit" className="btn-primary w-full">
-                <Save className="h-5 w-5 inline mr-2" />
-                Add Bus Stop
-              </button>
-            </form>
+                  {/* From → Via → To */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Route Details *
+                    </label>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div>
+                        <input
+                          type="text"
+                          className="input-field"
+                          placeholder="From (e.g., Trivandrum)"
+                          value={busForm.from}
+                          onChange={(e) => setBusForm({ ...busForm, from: e.target.value })}
+                          required
+                        />
+                      </div>
+                      <div>
+                        <input
+                          type="text"
+                          className="input-field"
+                          placeholder="Via (e.g., Kollam)"
+                          value={busForm.via}
+                          onChange={(e) => setBusForm({ ...busForm, via: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <input
+                          type="text"
+                          className="input-field"
+                          placeholder="To (e.g., Kochi)"
+                          value={busForm.to}
+                          onChange={(e) => setBusForm({ ...busForm, to: e.target.value })}
+                          required
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Bus Type */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Bus Type *
+                    </label>
+                    <select
+                      className="input-field"
+                      value={busForm.type}
+                      onChange={(e) => setBusForm({ ...busForm, type: e.target.value })}
+                      required
+                    >
+                      <option value="KSRTC">KSRTC</option>
+                      <option value="Private">Private</option>
+                      <option value="Fast">Fast</option>
+                      <option value="Super Fast">Super Fast</option>
+                      <option value="Ordinary">Ordinary</option>
+                    </select>
+                  </div>
+
+                  {/* Stop Name and Time Section */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-3">
+                      Stops and Timings *
+                    </label>
+                    
+                    <div className="space-y-3">
+                      {stopTimings.map((stopTiming, index) => (
+                        <div key={index} className="flex gap-3 items-start">
+                          <div className="flex-1">
+                            <input
+                              type="text"
+                              className="input-field"
+                              placeholder="e.g., Thiruvananthapuram Central"
+                              value={stopTiming.stopName}
+                              onChange={(e) => updateStopTiming(index, 'stopName', e.target.value)}
+                              required
+                            />
+                          </div>
+                          <div className="w-32">
+                            <input
+                              type="text"
+                              className="input-field"
+                              placeholder="HH:MM"
+                              value={stopTiming.arrivalTime}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                if (/^[0-9:]*$/.test(value)) {
+                                  updateStopTiming(index, 'arrivalTime', value);
+                                }
+                              }}
+                              maxLength={5}
+                              required
+                            />
+                          </div>
+                          <div className="w-24">
+                            <select
+                              className="input-field"
+                              value={stopTiming.period}
+                              onChange={(e) => updateStopTiming(index, 'period', e.target.value)}
+                              required
+                            >
+                              <option value="AM">AM</option>
+                              <option value="PM">PM</option>
+                            </select>
+                          </div>
+                          {stopTimings.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => removeStopTimingField(index)}
+                              className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Remove stop"
+                            >
+                              <X className="h-5 w-5" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={addStopTimingField}
+                      className="mt-3 flex items-center gap-2 text-primary-600 hover:text-primary-700 font-medium transition-colors"
+                    >
+                      <Plus className="h-5 w-5" />
+                      Add Another Stop
+                    </button>
+                  </div>
+
+                  {/* Submit Button */}
+                  <div className="flex gap-3">
+                    <button type="submit" className="btn-primary flex-1">
+                      <Save className="h-5 w-5 inline mr-2" />
+                      Update Bus
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelEdit}
+                      className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* List All Buses */}
+            {!editingBus && (
+              <div className="card">
+                <h2 className="text-2xl font-bold text-gray-800 mb-6">All Buses</h2>
+                
+                {/* Search Bar */}
+                <div className="mb-6">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <input
+                      type="text"
+                      className="input-field pl-10"
+                      placeholder="Search by bus name, route, or stops..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                    />
+                  </div>
+                  {searchQuery && (
+                    <p className="text-sm text-gray-600 mt-2">
+                      Found {filteredBuses.length} bus{filteredBuses.length !== 1 ? 'es' : ''}
+                    </p>
+                  )}
+                </div>
+                
+                {isLoadingBuses ? (
+                  <div className="text-center py-8 text-gray-600">Loading buses...</div>
+                ) : allBuses.length === 0 ? (
+                  <div className="text-center py-8 text-gray-600">No buses added yet.</div>
+                ) : filteredBuses.length === 0 ? (
+                  <div className="text-center py-8 text-gray-600">
+                    No buses match your search.
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {filteredBuses.map((bus) => (
+                      <div
+                        key={bus.id}
+                        className="border border-gray-200 rounded-lg p-4 hover:border-primary-300 transition-colors"
+                      >
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <h3 className="text-lg font-semibold text-gray-800 mb-2">
+                              {bus.busName}
+                            </h3>
+                            <div className="text-sm text-gray-600 space-y-1">
+                              <p>
+                                <span className="font-medium">Route:</span> {bus.from}
+                                {bus.via && ` → ${bus.via}`} → {bus.to}
+                              </p>
+                              <p>
+                                <span className="font-medium">Type:</span> {bus.type}
+                              </p>
+                              <p>
+                                <span className="font-medium">Stops:</span> {bus.route.length} stops
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex gap-2 ml-4">
+                            <button
+                              onClick={() => handleEditBus(bus)}
+                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                              title="Edit bus"
+                            >
+                              <Edit2 className="h-5 w-5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteBus(bus.id, bus.busName)}
+                              className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Delete bus"
+                            >
+                              <Trash2 className="h-5 w-5" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
