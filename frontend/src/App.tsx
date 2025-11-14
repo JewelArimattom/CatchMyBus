@@ -8,6 +8,7 @@ import SearchResults from './pages/SearchResults';
 import FavoritesPage from './pages/FavoritesPage';
 import AdminPage from './pages/AdminPage';
 import AboutPage from './pages/AboutPage';
+import DebugPage from './pages/DebugPage';
 
 function App() {
   return (
@@ -28,6 +29,7 @@ function App() {
               } 
             />
             <Route path="/about" element={<AboutPage />} />
+            <Route path="/debug" element={<DebugPage />} />
           </Routes>
         </main>
         <Footer />
