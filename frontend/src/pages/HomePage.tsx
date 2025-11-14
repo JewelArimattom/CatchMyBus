@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, MapPin, Navigation, Clock, Star, ArrowLeft } from 'lucide-react';
+import { Search, MapPin, Navigation, Clock, Star } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../config/api';
 import { BusResult } from '../types';
