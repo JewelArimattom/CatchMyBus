@@ -29,7 +29,7 @@ const FavoritesPage = () => {
 
   const handleDelete = async (id: string) => {
     try {
-      await api.delete(`/favorites/${id}`);
+      await api.delete(`/api/favorites/${id}`);
       setFavorites(favorites.filter((f) => f.id !== id));
       toast.success('Favorite removed');
     } catch (error) {
