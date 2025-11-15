@@ -48,7 +48,7 @@ const AdminPage = () => {
   const fetchAllBuses = async () => {
     setIsLoadingBuses(true);
     try {
-      const response = await api.get('/admin/buses');
+      const response = await api.get('/api/admin/buses');
       setAllBuses(response.data.data || []);
     } catch (error) {
       console.error('Error fetching buses:', error);
@@ -106,7 +106,7 @@ const AdminPage = () => {
     };
     
     try {
-      await api.put(`/admin/buses/${editingBus.id}`, busData);
+      await api.put(`/api/admin/buses/${editingBus.id}`, busData);
       toast.success('Bus updated successfully!');
       setEditingBus(null);
       setBusForm({ busName: '', from: '', via: '', to: '', type: 'KSRTC' });
@@ -124,7 +124,7 @@ const AdminPage = () => {
     }
     
     try {
-      await api.delete(`/admin/buses/${busId}`);
+      await api.delete(`/api/admin/buses/${busId}`);
       toast.success('Bus deleted successfully!');
       fetchAllBuses();
     } catch (error) {
@@ -199,7 +199,7 @@ const AdminPage = () => {
     console.log('API base URL:', api.defaults.baseURL);
     
     try {
-      const response = await api.post('/api/admin/buses', busData);
+      const response = await api.post('/admin/buses', busData);
       console.log('✅ Bus added successfully:', response.data);
       toast.success('Bus added successfully!');
       setBusForm({ busName: '', from: '', via: '', to: '', type: 'KSRTC' });
