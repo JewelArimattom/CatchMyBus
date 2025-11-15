@@ -34,6 +34,8 @@ app.use(express.urlencoded({ extended: true }));
 // Request logging
 app.use((req: Request, res: Response, next: NextFunction) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  console.log('Origin:', req.headers.origin);
+  console.log('CORS_ORIGIN env:', process.env.CORS_ORIGIN);
   next();
 });
 
