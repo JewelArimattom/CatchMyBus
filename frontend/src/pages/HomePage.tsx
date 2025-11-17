@@ -24,8 +24,20 @@ const HomePage = () => {
       const resp = await api.get('/api/buses/search', { params: { from, to, type, time: formData.time, showAll: formData.showAll } });
       setResults(resp.data.data || []);
     } catch (err) {
-      console.error('Error fetching bus results from HomePage:', err);
-      toast.error('Failed to fetch bus results');
+      // Improve error logging for debugging
+      // AxiosError may contain response data/status — surface that to the console and user
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const e: any = err;
+      if (e.response) {
+        console.error('Error fetching bus results - response:', e.response.status, e.response.data);
+        toast.error(`Search failed: ${e.response.status} ${e.response.statusText || ''}`);
+      } else if (e.request) {
+        console.error('Error fetching bus results - no response (network):', e.message);
+        toast.error('Network error: failed to contact backend');
+      } else {
+        console.error('Error fetching bus results:', e.message || e);
+        toast.error('Failed to fetch bus results');
+      }
       setResults([]);
     } finally {
       setLoadingResults(false);
