@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../config/firebase';
 import { calculateDistance, calculateFare, calculateTime } from '../utils/helpers';
+import { calculateRealDistance } from '../utils/googleMaps';
 
 const router = Router();
 
@@ -24,7 +25,7 @@ router.get('/search', async (req: Request, res: Response) => {
     console.log(`Total buses in DB: ${busesSnapshot.size}`);
     const results: any[] = [];
 
-    busesSnapshot.forEach((doc) => {
+    for (const doc of busesSnapshot.docs) {
       const busData = doc.data();
       const bus: any = { id: doc.id, ...busData };
       console.log(`\n[Bus: ${doc.id}] busName='${bus.busName}' from='${bus.from}' to='${bus.to}' type='${bus.type}'`);
@@ -33,7 +34,7 @@ router.get('/search', async (req: Request, res: Response) => {
       // Check if bus type filter is applied
       if (type && type !== 'all' && bus.type !== type) {
         console.log(`  ❌ Type mismatch: ${bus.type} !== ${type}`);
-        return;
+        continue;
       }
 
       // Build a normalized array of stop strings from bus.route
@@ -81,87 +82,54 @@ router.get('/search', async (req: Request, res: Response) => {
       }
 
       if (fromIndex !== -1 && toIndex !== -1) {
-        console.log(`  ✅ Route match found!`);
-        // If indexes are in reverse order, swap them so timings reflect requested direction
-        let aIndex = fromIndex;
-        let bIndex = toIndex;
-        let reversed = false;
-        if (fromIndex > toIndex) {
-          aIndex = toIndex;
-          bIndex = fromIndex;
-          reversed = true;
+        console.log(`  ✅ Route contains both stops`);
+        // Enforce direction: only match if 'from' appears before 'to' in the route
+        if (qFrom === qTo) {
+          // same-stop query is allowed
+          console.log(`  Same-stop query; treating as valid match at index ${fromIndex}`);
+        } else if (fromIndex > toIndex) {
+          // Found both stops but in reverse order -> not a match for this direction
+          console.log(`  ❌ Stops found but in reverse order (fromIndex=${fromIndex} > toIndex=${toIndex}); skipping`);
+          // Do not consider this a match for the user's requested direction
+          continue;
         }
+
+        // At this point 'fromIndex' <= 'toIndex' (or same-stop). Use them as aIndex/bIndex
+        const aIndex = Math.min(fromIndex, toIndex);
+        const bIndex = Math.max(fromIndex, toIndex);
+
+        // Get actual stop names for distance calculation
+        const fromStopName = routeArray[aIndex] || bus.route[aIndex] || '';
+        const toStopName = routeArray[bIndex] || bus.route[bIndex] || '';
+        
+        // Calculate real distance using free geocoding + haversine
+        const realDistance = await calculateRealDistance(fromStopName, toStopName);
+        const distance = realDistance.success ? realDistance.distance : calculateDistance(aIndex, bIndex);
+        const estimatedTime = realDistance.success ? realDistance.duration : calculateTime(distance);
+        const fare = calculateFare(distance, bus.type);
 
         // Mock data for timings - in production, fetch from database
         const fromTiming = {
           stopId: `stop_${aIndex}`,
-          stopName: routeArray[aIndex] || bus.route[aIndex] || '',
+          stopName: fromStopName,
           arrivalTime: '08:00 AM',
           departureTime: '08:05 AM',
         };
 
         const toTiming = {
           stopId: `stop_${bIndex}`,
-          stopName: routeArray[bIndex] || bus.route[bIndex] || '',
+          stopName: toStopName,
           arrivalTime: '10:30 AM',
           departureTime: '10:35 AM',
         };
 
-        // Calculate approximate values
-        const distance = calculateDistance(aIndex, bIndex);
-        const estimatedTime = calculateTime(distance);
-        const fare = calculateFare(distance, bus.type);
-
-        // If the original query was reversed (fromIndex > toIndex), swap timings to match query
-        if (reversed) {
-          results.push({ bus, fromTiming: toTiming, toTiming: fromTiming, distance, estimatedTime, fare });
-        } else {
-          results.push({ bus, fromTiming, toTiming, distance, estimatedTime, fare });
-        }
-        return; // matched by route, continue to next bus
+        results.push({ bus, fromTiming, toTiming, distance, estimatedTime, fare });
+        continue; // matched by route, continue to next bus
       }
-
-      // If route match failed, still try to find at least one of the stops in the route
-      // This allows partial matches (e.g., bus goes through one of the requested stops)
-      console.log(`  Route match failed (need both stops). Checking for partial matches...`);
-      if (hasRoute && (fromIndex !== -1 || toIndex !== -1)) {
-        // At least one stop was found in the route, but not both
-        // We'll return a partial match so the UI can surface buses that pass through one of the requested stops.
-        console.log(`  ⚠️  Partial match: fromIndex=${fromIndex}, toIndex=${toIndex}`);
-
-        const matchIndex = fromIndex !== -1 ? fromIndex : toIndex;
-
-        // Try to pick a neighboring stop to form a small segment for ETA/fare estimation
-        let neighborIndex = matchIndex;
-        if (fromIndex !== -1 && toIndex === -1) {
-          neighborIndex = Math.min(matchIndex + 1, routeArray.length - 1);
-        } else if (toIndex !== -1 && fromIndex === -1) {
-          neighborIndex = Math.max(matchIndex - 1, 0);
-        }
-
-        const fromTiming = {
-          stopId: `stop_${matchIndex}`,
-          stopName: routeArray[matchIndex] || '',
-          arrivalTime: '08:00 AM',
-          departureTime: '08:05 AM',
-        };
-
-        const toTiming = {
-          stopId: `stop_${neighborIndex}`,
-          stopName: routeArray[neighborIndex] || routeArray[matchIndex] || '',
-          arrivalTime: '08:30 AM',
-          departureTime: '08:35 AM',
-        };
-
-        const a = Math.min(matchIndex, neighborIndex);
-        const b = Math.max(matchIndex, neighborIndex);
-        const distance = calculateDistance(a, b);
-        const estimatedTime = calculateTime(distance);
-        const fare = calculateFare(distance, bus.type);
-
-        results.push({ bus, fromTiming, toTiming, distance, estimatedTime, fare, partial: true });
-        return;
-      }
+      // If we reach here, route match failed for this bus (or didn't satisfy direction)
+      // For strict two-stop searches (both 'from' and 'to' provided) we do NOT return partial matches.
+      // If you want partial matches in the future, consider adding a `partial=true` query param.
+      console.log(`  No valid directional route match for this bus; skipping partial matches for strict from->to search.`);
 
       // Fallback: match using bus.from and bus.to fields (useful when route array is not representative)
       // BUT: first try using the first and last stops from the route if available
@@ -196,10 +164,10 @@ router.get('/search', async (req: Request, res: Response) => {
         const fare = calculateFare(distance, bus.type);
 
         results.push({ bus, fromTiming, toTiming, distance, estimatedTime, fare });
-        return;
+        continue;
       }
       console.log(`  ❌ No match for this bus`);
-    });
+    }
 
     console.log(`\n=== SEARCH END === Found ${results.length} result(s)\n`);
 
