@@ -20,10 +20,48 @@ router.get('/search', async (req: Request, res: Response) => {
     const qTo = normalize(to as string);
     console.log(`\n=== SEARCH START === Query: from='${from}' (normalized='${qFrom}') to='${to}' (normalized='${qTo}') type='${type}'`);
 
+    // Parse time param (default to current time)
+    const timeParam = (req.query.time as string) || '';
+    const parseTimeToMinutes = (t: string) => {
+      if (!t) return null;
+      t = t.trim();
+      // Accept HH:MM (24h) or HH:MM AM/PM
+      const ampmMatch = t.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+      if (ampmMatch) {
+        let h = parseInt(ampmMatch[1], 10);
+        const m = parseInt(ampmMatch[2], 10);
+        const ampm = ampmMatch[3].toUpperCase();
+        if (ampm === 'PM' && h !== 12) h += 12;
+        if (ampm === 'AM' && h === 12) h = 0;
+        return h * 60 + m;
+      }
+      const hmMatch = t.match(/^(\d{1,2}):(\d{2})$/);
+      if (hmMatch) {
+        const h = parseInt(hmMatch[1], 10);
+        const m = parseInt(hmMatch[2], 10);
+        return h * 60 + m;
+      }
+      // ISO time fallback
+      const iso = Date.parse(t as string);
+      if (!isNaN(iso)) {
+        const dt = new Date(iso);
+        return dt.getHours() * 60 + dt.getMinutes();
+      }
+      return null;
+    };
+
+    const now = new Date();
+    const defaultMinutes = now.getHours() * 60 + now.getMinutes();
+    const requestedMinutes = parseTimeToMinutes(timeParam) ?? defaultMinutes;
+
     // Fetch all buses
     const busesSnapshot = await db.collection('buses').get();
     console.log(`Total buses in DB: ${busesSnapshot.size}`);
     const results: any[] = [];
+
+    // We'll collect time-aware candidates so we can pick buses at/after requested time
+    const timeCandidates: Array<{result: any; departMinutes?: number; absDiff?: number}> = [];
+    const showAll = String(req.query.showAll || '').toLowerCase() === 'true';
 
     for (const doc of busesSnapshot.docs) {
       const busData = doc.data();
@@ -108,22 +146,48 @@ router.get('/search', async (req: Request, res: Response) => {
         const estimatedTime = realDistance.success ? realDistance.duration : calculateTime(distance);
         const fare = calculateFare(distance, bus.type);
 
-        // Mock data for timings - in production, fetch from database
-        const fromTiming = {
-          stopId: `stop_${aIndex}`,
-          stopName: fromStopName,
-          arrivalTime: '08:00 AM',
-          departureTime: '08:05 AM',
-        };
+        // Try to use provided timings on the bus document if available
+        let fromTiming: any = null;
+        let toTiming: any = null;
+        if (Array.isArray(bus.timings)) {
+          const normalizedTimings = (bus.timings as any[]).map(t => ({...t, _n: normalize(t.stopName || t.stop || '')}));
+          const matchFrom = normalizedTimings.find(t => t._n.includes(qFrom) || qFrom.includes(t._n));
+          const matchTo = normalizedTimings.find(t => t._n.includes(qTo) || qTo.includes(t._n));
+          if (matchFrom) fromTiming = matchFrom;
+          if (matchTo) toTiming = matchTo;
+        }
 
-        const toTiming = {
-          stopId: `stop_${bIndex}`,
-          stopName: toStopName,
-          arrivalTime: '10:30 AM',
-          departureTime: '10:35 AM',
-        };
+        // Fallback to mock timings if not available
+        if (!fromTiming) {
+          fromTiming = {
+            stopId: `stop_${aIndex}`,
+            stopName: fromStopName,
+            arrivalTime: '08:00 AM',
+            departureTime: '08:05 AM',
+          };
+        }
+        if (!toTiming) {
+          toTiming = {
+            stopId: `stop_${bIndex}`,
+            stopName: toStopName,
+            arrivalTime: '10:30 AM',
+            departureTime: '10:35 AM',
+          };
+        }
 
-        results.push({ bus, fromTiming, toTiming, distance, estimatedTime, fare });
+        // If time filtering is requested, parse the bus departure time at the from stop
+        const parseTimeField = (tstr: string) => parseTimeToMinutes(tstr as string);
+        const departMinutes = parseTimeField(fromTiming.departureTime) ?? parseTimeField(fromTiming.arrivalTime) ?? null;
+
+        const resultObj = { bus, fromTiming, toTiming, distance, estimatedTime, fare };
+
+        if (departMinutes !== null) {
+          const diff = departMinutes - requestedMinutes; // positive => after requested
+          timeCandidates.push({ result: resultObj, departMinutes, absDiff: Math.abs(diff) });
+        } else {
+          // No concrete timing for this bus; push to results as fallback
+          results.push(resultObj);
+        }
         continue; // matched by route, continue to next bus
       }
       // If we reach here, route match failed for this bus (or didn't satisfy direction)
@@ -171,14 +235,54 @@ router.get('/search', async (req: Request, res: Response) => {
 
     console.log(`\n=== SEARCH END === Found ${results.length} result(s)\n`);
 
-    // Sort by departure time (mock implementation)
-    results.sort((a, b) => a.fromTiming.departureTime.localeCompare(b.fromTiming.departureTime));
+    // If we collected time candidates, prefer buses at/after requested time, otherwise show nearest
+    if (timeCandidates.length > 0) {
+      if (showAll) {
+        // Return all directional matches sorted by departure time (earliest first)
+        const withDepart = timeCandidates
+          .filter(tc => typeof tc.departMinutes === 'number')
+          .sort((a, b) => (a.departMinutes! - b.departMinutes!))
+          .map(tc => tc.result);
+        // Append any non-timed results afterwards, dedup by bus id
+        const allResults = [...withDepart, ...results];
+        const seen = new Set();
+        const deduped = allResults.filter(r => {
+          const id = r.bus?.id || JSON.stringify(r.bus);
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+        console.log(`\n=== SEARCH END === Returning ${deduped.length} time-filtered (showAll) result(s)\n`);
+        return res.json({ success: true, data: deduped, count: deduped.length });
+      }
+      // Attach diff (depart - requested) and sort
+      const annotated = timeCandidates.map(tc => {
+        const diff = (tc.departMinutes ?? 0) - requestedMinutes;
+        return { ...tc, diff };
+      });
+      const atOrAfter = annotated.filter(a => a.diff >= 0).sort((x, y) => x.diff - y.diff);
+      let chosen: any[] = [];
+      if (atOrAfter.length > 0) {
+        chosen = atOrAfter.map(a => a.result);
+      } else {
+        // No future buses — pick nearest by absolute diff
+        const nearest = annotated.sort((x, y) => x.absDiff! - y.absDiff!).slice(0, 10);
+        chosen = nearest.map(n => n.result);
+      }
 
-    res.json({
-      success: true,
-      data: results,
-      count: results.length,
-    });
+      // Merge chosen with any fallback results we added earlier (no timing), keeping chosen first
+      const merged = [...chosen, ...results];
+      // Limit results to a reasonable number (e.g., 50)
+      const final = merged.slice(0, 50);
+
+      console.log(`\n=== SEARCH END === Returning ${final.length} time-filtered result(s)\n`);
+      return res.json({ success: true, data: final, count: final.length });
+    }
+
+    // Fallback: no time-aware candidates, sort by departureTime string if available
+    results.sort((a, b) => (a.fromTiming?.departureTime || '').localeCompare(b.fromTiming?.departureTime || ''));
+
+    res.json({ success: true, data: results, count: results.length });
   } catch (error) {
     console.error('Error searching buses:', error);
     res.status(500).json({ error: 'Failed to search buses' });
