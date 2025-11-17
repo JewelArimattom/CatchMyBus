@@ -149,12 +149,14 @@ router.get('/search', async (req: Request, res: Response) => {
         // Try to use provided timings on the bus document if available
         let fromTiming: any = null;
         let toTiming: any = null;
+        let usedProvidedTimings = false;
         if (Array.isArray(bus.timings)) {
           const normalizedTimings = (bus.timings as any[]).map(t => ({...t, _n: normalize(t.stopName || t.stop || '')}));
           const matchFrom = normalizedTimings.find(t => t._n.includes(qFrom) || qFrom.includes(t._n));
           const matchTo = normalizedTimings.find(t => t._n.includes(qTo) || qTo.includes(t._n));
           if (matchFrom) fromTiming = matchFrom;
           if (matchTo) toTiming = matchTo;
+          if (matchFrom && matchTo) usedProvidedTimings = true;
         }
 
         // Fallback to mock timings if not available
@@ -179,7 +181,8 @@ router.get('/search', async (req: Request, res: Response) => {
         const parseTimeField = (tstr: string) => parseTimeToMinutes(tstr as string);
         const departMinutes = parseTimeField(fromTiming.departureTime) ?? parseTimeField(fromTiming.arrivalTime) ?? null;
 
-        const resultObj = { bus, fromTiming, toTiming, distance, estimatedTime, fare };
+        const timingSource = usedProvidedTimings ? 'provided' : 'estimated';
+        const resultObj = { bus, fromTiming, toTiming, distance, estimatedTime, fare, timingSource };
 
         if (departMinutes !== null) {
           const diff = departMinutes - requestedMinutes; // positive => after requested

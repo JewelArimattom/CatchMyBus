@@ -29,6 +29,12 @@ const BusCard = ({ result, compact = false }: BusCardProps) => {
 
   return (
     <div className="card hover:shadow-2xl transition-all duration-300 animate-slide-up relative overflow-hidden">
+      {/* Show badge when timings are estimated */}
+      {result.timingSource === 'estimated' && (
+        <div className="absolute left-4 top-4 bg-yellow-50 text-yellow-800 px-3 py-1 rounded-full text-xs font-medium z-20">
+          Estimated times
+        </div>
+      )}
       {/* Partial Match Banner */}
       {partial && (
         <div className="bg-yellow-100 border-l-4 border-yellow-500 px-4 py-2 mb-4">
