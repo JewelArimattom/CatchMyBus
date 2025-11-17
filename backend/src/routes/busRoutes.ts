@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../config/firebase';
 import { calculateDistance, calculateFare, calculateTime } from '../utils/helpers';
+import { calculateRealDistance } from '../utils/googleMaps';
 
 const router = Router();
 
@@ -19,12 +20,50 @@ router.get('/search', async (req: Request, res: Response) => {
     const qTo = normalize(to as string);
     console.log(`\n=== SEARCH START === Query: from='${from}' (normalized='${qFrom}') to='${to}' (normalized='${qTo}') type='${type}'`);
 
+    // Parse time param (default to current time)
+    const timeParam = (req.query.time as string) || '';
+    const parseTimeToMinutes = (t: string) => {
+      if (!t) return null;
+      t = t.trim();
+      // Accept HH:MM (24h) or HH:MM AM/PM
+      const ampmMatch = t.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+      if (ampmMatch) {
+        let h = parseInt(ampmMatch[1], 10);
+        const m = parseInt(ampmMatch[2], 10);
+        const ampm = ampmMatch[3].toUpperCase();
+        if (ampm === 'PM' && h !== 12) h += 12;
+        if (ampm === 'AM' && h === 12) h = 0;
+        return h * 60 + m;
+      }
+      const hmMatch = t.match(/^(\d{1,2}):(\d{2})$/);
+      if (hmMatch) {
+        const h = parseInt(hmMatch[1], 10);
+        const m = parseInt(hmMatch[2], 10);
+        return h * 60 + m;
+      }
+      // ISO time fallback
+      const iso = Date.parse(t as string);
+      if (!isNaN(iso)) {
+        const dt = new Date(iso);
+        return dt.getHours() * 60 + dt.getMinutes();
+      }
+      return null;
+    };
+
+    const now = new Date();
+    const defaultMinutes = now.getHours() * 60 + now.getMinutes();
+    const requestedMinutes = parseTimeToMinutes(timeParam) ?? defaultMinutes;
+
     // Fetch all buses
     const busesSnapshot = await db.collection('buses').get();
     console.log(`Total buses in DB: ${busesSnapshot.size}`);
     const results: any[] = [];
 
-    busesSnapshot.forEach((doc) => {
+    // We'll collect time-aware candidates so we can pick buses at/after requested time
+    const timeCandidates: Array<{result: any; departMinutes?: number; absDiff?: number}> = [];
+    const showAll = String(req.query.showAll || '').toLowerCase() === 'true';
+
+    for (const doc of busesSnapshot.docs) {
       const busData = doc.data();
       const bus: any = { id: doc.id, ...busData };
       console.log(`\n[Bus: ${doc.id}] busName='${bus.busName}' from='${bus.from}' to='${bus.to}' type='${bus.type}'`);
@@ -33,7 +72,7 @@ router.get('/search', async (req: Request, res: Response) => {
       // Check if bus type filter is applied
       if (type && type !== 'all' && bus.type !== type) {
         console.log(`  ❌ Type mismatch: ${bus.type} !== ${type}`);
-        return;
+        continue;
       }
 
       // Build a normalized array of stop strings from bus.route
@@ -81,87 +120,83 @@ router.get('/search', async (req: Request, res: Response) => {
       }
 
       if (fromIndex !== -1 && toIndex !== -1) {
-        console.log(`  ✅ Route match found!`);
-        // If indexes are in reverse order, swap them so timings reflect requested direction
-        let aIndex = fromIndex;
-        let bIndex = toIndex;
-        let reversed = false;
-        if (fromIndex > toIndex) {
-          aIndex = toIndex;
-          bIndex = fromIndex;
-          reversed = true;
+        console.log(`  ✅ Route contains both stops`);
+        // Enforce direction: only match if 'from' appears before 'to' in the route
+        if (qFrom === qTo) {
+          // same-stop query is allowed
+          console.log(`  Same-stop query; treating as valid match at index ${fromIndex}`);
+        } else if (fromIndex > toIndex) {
+          // Found both stops but in reverse order -> not a match for this direction
+          console.log(`  ❌ Stops found but in reverse order (fromIndex=${fromIndex} > toIndex=${toIndex}); skipping`);
+          // Do not consider this a match for the user's requested direction
+          continue;
         }
 
-        // Mock data for timings - in production, fetch from database
-        const fromTiming = {
-          stopId: `stop_${aIndex}`,
-          stopName: routeArray[aIndex] || bus.route[aIndex] || '',
-          arrivalTime: '08:00 AM',
-          departureTime: '08:05 AM',
-        };
+        // At this point 'fromIndex' <= 'toIndex' (or same-stop). Use them as aIndex/bIndex
+        const aIndex = Math.min(fromIndex, toIndex);
+        const bIndex = Math.max(fromIndex, toIndex);
 
-        const toTiming = {
-          stopId: `stop_${bIndex}`,
-          stopName: routeArray[bIndex] || bus.route[bIndex] || '',
-          arrivalTime: '10:30 AM',
-          departureTime: '10:35 AM',
-        };
-
-        // Calculate approximate values
-        const distance = calculateDistance(aIndex, bIndex);
-        const estimatedTime = calculateTime(distance);
+        // Get actual stop names for distance calculation
+        const fromStopName = routeArray[aIndex] || bus.route[aIndex] || '';
+        const toStopName = routeArray[bIndex] || bus.route[bIndex] || '';
+        
+        // Calculate real distance using free geocoding + haversine
+        const realDistance = await calculateRealDistance(fromStopName, toStopName);
+        const distance = realDistance.success ? realDistance.distance : calculateDistance(aIndex, bIndex);
+        const estimatedTime = realDistance.success ? realDistance.duration : calculateTime(distance);
         const fare = calculateFare(distance, bus.type);
 
-        // If the original query was reversed (fromIndex > toIndex), swap timings to match query
-        if (reversed) {
-          results.push({ bus, fromTiming: toTiming, toTiming: fromTiming, distance, estimatedTime, fare });
+        // Try to use provided timings on the bus document if available
+        let fromTiming: any = null;
+        let toTiming: any = null;
+        let usedProvidedTimings = false;
+        if (Array.isArray(bus.timings)) {
+          const normalizedTimings = (bus.timings as any[]).map(t => ({...t, _n: normalize(t.stopName || t.stop || '')}));
+          const matchFrom = normalizedTimings.find(t => t._n.includes(qFrom) || qFrom.includes(t._n));
+          const matchTo = normalizedTimings.find(t => t._n.includes(qTo) || qTo.includes(t._n));
+          if (matchFrom) fromTiming = matchFrom;
+          if (matchTo) toTiming = matchTo;
+          if (matchFrom && matchTo) usedProvidedTimings = true;
+        }
+
+        // Fallback to mock timings if not available
+        if (!fromTiming) {
+          fromTiming = {
+            stopId: `stop_${aIndex}`,
+            stopName: fromStopName,
+            arrivalTime: '08:00 AM',
+            departureTime: '08:05 AM',
+          };
+        }
+        if (!toTiming) {
+          toTiming = {
+            stopId: `stop_${bIndex}`,
+            stopName: toStopName,
+            arrivalTime: '10:30 AM',
+            departureTime: '10:35 AM',
+          };
+        }
+
+        // If time filtering is requested, parse the bus departure time at the from stop
+        const parseTimeField = (tstr: string) => parseTimeToMinutes(tstr as string);
+        const departMinutes = parseTimeField(fromTiming.departureTime) ?? parseTimeField(fromTiming.arrivalTime) ?? null;
+
+        const timingSource = usedProvidedTimings ? 'provided' : 'estimated';
+        const resultObj = { bus, fromTiming, toTiming, distance, estimatedTime, fare, timingSource };
+
+        if (departMinutes !== null) {
+          const diff = departMinutes - requestedMinutes; // positive => after requested
+          timeCandidates.push({ result: resultObj, departMinutes, absDiff: Math.abs(diff) });
         } else {
-          results.push({ bus, fromTiming, toTiming, distance, estimatedTime, fare });
+          // No concrete timing for this bus; push to results as fallback
+          results.push(resultObj);
         }
-        return; // matched by route, continue to next bus
+        continue; // matched by route, continue to next bus
       }
-
-      // If route match failed, still try to find at least one of the stops in the route
-      // This allows partial matches (e.g., bus goes through one of the requested stops)
-      console.log(`  Route match failed (need both stops). Checking for partial matches...`);
-      if (hasRoute && (fromIndex !== -1 || toIndex !== -1)) {
-        // At least one stop was found in the route, but not both
-        // We'll return a partial match so the UI can surface buses that pass through one of the requested stops.
-        console.log(`  ⚠️  Partial match: fromIndex=${fromIndex}, toIndex=${toIndex}`);
-
-        const matchIndex = fromIndex !== -1 ? fromIndex : toIndex;
-
-        // Try to pick a neighboring stop to form a small segment for ETA/fare estimation
-        let neighborIndex = matchIndex;
-        if (fromIndex !== -1 && toIndex === -1) {
-          neighborIndex = Math.min(matchIndex + 1, routeArray.length - 1);
-        } else if (toIndex !== -1 && fromIndex === -1) {
-          neighborIndex = Math.max(matchIndex - 1, 0);
-        }
-
-        const fromTiming = {
-          stopId: `stop_${matchIndex}`,
-          stopName: routeArray[matchIndex] || '',
-          arrivalTime: '08:00 AM',
-          departureTime: '08:05 AM',
-        };
-
-        const toTiming = {
-          stopId: `stop_${neighborIndex}`,
-          stopName: routeArray[neighborIndex] || routeArray[matchIndex] || '',
-          arrivalTime: '08:30 AM',
-          departureTime: '08:35 AM',
-        };
-
-        const a = Math.min(matchIndex, neighborIndex);
-        const b = Math.max(matchIndex, neighborIndex);
-        const distance = calculateDistance(a, b);
-        const estimatedTime = calculateTime(distance);
-        const fare = calculateFare(distance, bus.type);
-
-        results.push({ bus, fromTiming, toTiming, distance, estimatedTime, fare, partial: true });
-        return;
-      }
+      // If we reach here, route match failed for this bus (or didn't satisfy direction)
+      // For strict two-stop searches (both 'from' and 'to' provided) we do NOT return partial matches.
+      // If you want partial matches in the future, consider adding a `partial=true` query param.
+      console.log(`  No valid directional route match for this bus; skipping partial matches for strict from->to search.`);
 
       // Fallback: match using bus.from and bus.to fields (useful when route array is not representative)
       // BUT: first try using the first and last stops from the route if available
@@ -196,21 +231,61 @@ router.get('/search', async (req: Request, res: Response) => {
         const fare = calculateFare(distance, bus.type);
 
         results.push({ bus, fromTiming, toTiming, distance, estimatedTime, fare });
-        return;
+        continue;
       }
       console.log(`  ❌ No match for this bus`);
-    });
+    }
 
     console.log(`\n=== SEARCH END === Found ${results.length} result(s)\n`);
 
-    // Sort by departure time (mock implementation)
-    results.sort((a, b) => a.fromTiming.departureTime.localeCompare(b.fromTiming.departureTime));
+    // If we collected time candidates, prefer buses at/after requested time, otherwise show nearest
+    if (timeCandidates.length > 0) {
+      if (showAll) {
+        // Return all directional matches sorted by departure time (earliest first)
+        const withDepart = timeCandidates
+          .filter(tc => typeof tc.departMinutes === 'number')
+          .sort((a, b) => (a.departMinutes! - b.departMinutes!))
+          .map(tc => tc.result);
+        // Append any non-timed results afterwards, dedup by bus id
+        const allResults = [...withDepart, ...results];
+        const seen = new Set();
+        const deduped = allResults.filter(r => {
+          const id = r.bus?.id || JSON.stringify(r.bus);
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+        console.log(`\n=== SEARCH END === Returning ${deduped.length} time-filtered (showAll) result(s)\n`);
+        return res.json({ success: true, data: deduped, count: deduped.length });
+      }
+      // Attach diff (depart - requested) and sort
+      const annotated = timeCandidates.map(tc => {
+        const diff = (tc.departMinutes ?? 0) - requestedMinutes;
+        return { ...tc, diff };
+      });
+      const atOrAfter = annotated.filter(a => a.diff >= 0).sort((x, y) => x.diff - y.diff);
+      let chosen: any[] = [];
+      if (atOrAfter.length > 0) {
+        chosen = atOrAfter.map(a => a.result);
+      } else {
+        // No future buses — pick nearest by absolute diff
+        const nearest = annotated.sort((x, y) => x.absDiff! - y.absDiff!).slice(0, 10);
+        chosen = nearest.map(n => n.result);
+      }
 
-    res.json({
-      success: true,
-      data: results,
-      count: results.length,
-    });
+      // Merge chosen with any fallback results we added earlier (no timing), keeping chosen first
+      const merged = [...chosen, ...results];
+      // Limit results to a reasonable number (e.g., 50)
+      const final = merged.slice(0, 50);
+
+      console.log(`\n=== SEARCH END === Returning ${final.length} time-filtered result(s)\n`);
+      return res.json({ success: true, data: final, count: final.length });
+    }
+
+    // Fallback: no time-aware candidates, sort by departureTime string if available
+    results.sort((a, b) => (a.fromTiming?.departureTime || '').localeCompare(b.fromTiming?.departureTime || ''));
+
+    res.json({ success: true, data: results, count: results.length });
   } catch (error) {
     console.error('Error searching buses:', error);
     res.status(500).json({ error: 'Failed to search buses' });

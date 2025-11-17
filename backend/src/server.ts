@@ -11,15 +11,24 @@ dotenv.config();
 const app: Application = express();
 const PORT = process.env.PORT || 5000;
 
-// CORS Configuration - MUST be FIRST middleware
+// Build allowed origins from environment, with sensible defaults for local dev
+const frontendEnv = process.env.FRONTEND_URL || 'http://localhost:5173';
+const frontendOrigins = frontendEnv.split(',').map((s) => s.trim()).filter(Boolean);
+const devOrigins = ['http://localhost:3000'];
+const allowedOrigins = Array.from(new Set([...frontendOrigins, ...devOrigins]));
+console.log('CORS allowed origins:', allowedOrigins);
+
+// CORS options (use a callback to allow requests with no origin)
 const corsOptions = {
-  origin: process.env.FRONTEND_URL 
-    ? process.env.FRONTEND_URL.split(',').map(o => o.trim())
-    : ['http://localhost:5173', 'http://localhost:3000'],
+  origin: (origin: any, callback: any) => {
+    if (!origin) return callback(null, true); // allow curl, mobile apps, same-origin
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS'));
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
-  optionsSuccessStatus: 200
+  optionsSuccessStatus: 200,
 };
 
 app.use(cors(corsOptions));

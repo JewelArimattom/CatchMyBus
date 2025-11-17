@@ -12,6 +12,8 @@ const HomePage = () => {
     from: '',
     to: '',
     busType: 'all',
+    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
+    showAll: false,
   });
   const [loadingResults, setLoadingResults] = useState(false);
   const [results, setResults] = useState<BusResult[]>([]);
@@ -19,11 +21,23 @@ const HomePage = () => {
   const fetchBusResults = async (from: string, to: string, type: string) => {
     try {
       setLoadingResults(true);
-      const resp = await api.get('/api/buses/search', { params: { from, to, type } });
+      const resp = await api.get('/api/buses/search', { params: { from, to, type, time: formData.time, showAll: formData.showAll } });
       setResults(resp.data.data || []);
     } catch (err) {
-      console.error('Error fetching bus results from HomePage:', err);
-      toast.error('Failed to fetch bus results');
+      // Improve error logging for debugging
+      // AxiosError may contain response data/status — surface that to the console and user
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const e: any = err;
+      if (e.response) {
+        console.error('Error fetching bus results - response:', e.response.status, e.response.data);
+        toast.error(`Search failed: ${e.response.status} ${e.response.statusText || ''}`);
+      } else if (e.request) {
+        console.error('Error fetching bus results - no response (network):', e.message);
+        toast.error('Network error: failed to contact backend');
+      } else {
+        console.error('Error fetching bus results:', e.message || e);
+        toast.error('Failed to fetch bus results');
+      }
       setResults([]);
     } finally {
       setLoadingResults(false);
@@ -100,6 +114,31 @@ const HomePage = () => {
             </div>
 
             {/* Bus Type Filter */}
+            {/* Time Filter */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                <Clock className="h-4 w-4 inline mr-1" />
+                Departure Time (optional)
+              </label>
+              <input
+                type="time"
+                className="input-field"
+                value={formData.time}
+                onChange={(e) => setFormData({ ...formData, time: e.target.value })}
+              />
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <input
+                id="showAll"
+                type="checkbox"
+                checked={formData.showAll}
+                onChange={(e) => setFormData({ ...formData, showAll: e.target.checked })}
+                className="h-4 w-4 text-primary-600"
+              />
+              <label htmlFor="showAll" className="text-sm text-gray-700">Show all matching buses (ignore time prioritization)</label>
+            </div>
+
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 <Clock className="h-4 w-4 inline mr-1" />
@@ -139,15 +178,23 @@ const HomePage = () => {
           <div>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-2xl font-bold">Search Results</h2>
-              <button onClick={() => navigate(`/search?from=${encodeURIComponent(formData.from)}&to=${encodeURIComponent(formData.to)}&type=${formData.busType}`)} className="text-sm text-primary-600 hover:underline">
+              <button onClick={() => navigate(`/search?from=${encodeURIComponent(formData.from)}&to=${encodeURIComponent(formData.to)}&type=${formData.busType}&time=${encodeURIComponent(formData.time)}&showAll=${formData.showAll}`)} className="text-sm text-primary-600 hover:underline">
                 View full results
               </button>
             </div>
 
             <div className="space-y-4">
-              {results.map((r, i) => (
-                <BusCard key={i} result={r} />
+              {results.slice(0, 3).map((r, i) => (
+                <BusCard key={i} result={r} compact={true} />
               ))}
+              {results.length > 3 && (
+                <button 
+                  onClick={() => navigate(`/search?from=${encodeURIComponent(formData.from)}&to=${encodeURIComponent(formData.to)}&type=${formData.busType}&time=${encodeURIComponent(formData.time)}&showAll=${formData.showAll}`)}
+                  className="w-full btn-secondary py-3"
+                >
+                  View All {results.length} Results →
+                </button>
+              )}
             </div>
           </div>
         )}
