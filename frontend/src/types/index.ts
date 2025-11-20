@@ -72,4 +72,5 @@ export interface BusResult {
   estimatedTime: number;
   fare: number;
   partial?: boolean; // Flag for partial matches
+  timingSource?: 'actual' | 'estimated'; // Source of timing data
 }
