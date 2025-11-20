@@ -72,4 +72,8 @@ export interface BusResult {
   estimatedTime: number;
   fare: number;
   partial?: boolean; // Flag for partial matches
+  // Optional metadata echoed from backend
+  requestedFrom?: string;
+  requestedTo?: string;
+  requestedTime?: string;
 }

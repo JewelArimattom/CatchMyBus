@@ -12,6 +12,17 @@ const BusCard = ({ result, compact = false }: BusCardProps) => {
   const { bus, fromTiming, toTiming, distance, estimatedTime, fare, partial } = result;
   const [expanded, setExpanded] = useState(false);
 
+  const extractStopNameFromRouteItem = (item: any) => {
+    if (!item && item !== 0) return '';
+    if (typeof item === 'string') return item;
+    return item?.name || item?.stopName || item?.stop || '';
+  };
+
+  const displayFromName = (fromTiming?.stopName) || bus.from || (Array.isArray(bus.route) && extractStopNameFromRouteItem(bus.route[0])) || 'N/A';
+  const displayToName = (toTiming?.stopName) || bus.to || (Array.isArray(bus.route) && extractStopNameFromRouteItem(bus.route[bus.route.length - 1])) || 'N/A';
+  const displayFromTime = fromTiming?.departureTime || fromTiming?.arrivalTime || 'TBD';
+  const displayToTime = toTiming?.arrivalTime || toTiming?.departureTime || 'TBD';
+
   const getBusTypeColor = (type: string) => {
     switch (type) {
       case 'KSRTC':
@@ -59,6 +70,11 @@ const BusCard = ({ result, compact = false }: BusCardProps) => {
             <div>
               <h3 className="text-xl font-bold text-gray-800">{bus.busName}</h3>
               <p className="text-sm text-gray-600">Bus No: {bus.busNumber}</p>
+              {(result.requestedFrom || result.requestedTo) && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Search: {result.requestedFrom || ''} → {result.requestedTo || ''} {result.requestedTime ? `at ${result.requestedTime}` : ''}
+                </p>
+              )}
             </div>
             <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getBusTypeColor(bus.type)}`}>
               {bus.type}
@@ -70,15 +86,15 @@ const BusCard = ({ result, compact = false }: BusCardProps) => {
             <div className="flex items-start space-x-2">
               <MapPin className="h-5 w-5 text-green-600 mt-0.5" />
               <div>
-                <p className="text-sm font-semibold text-gray-700">{fromTiming?.stopName || 'N/A'}</p>
-                <p className="text-lg font-bold text-gray-900">{fromTiming?.departureTime || 'TBD'}</p>
+                <p className="text-sm font-semibold text-gray-700">{displayFromName}</p>
+                <p className="text-lg font-bold text-gray-900">{displayFromTime}</p>
               </div>
             </div>
             <div className="flex items-start space-x-2">
               <MapPin className="h-5 w-5 text-red-600 mt-0.5" />
               <div>
-                <p className="text-sm font-semibold text-gray-700">{toTiming?.stopName || 'N/A'}</p>
-                <p className="text-lg font-bold text-gray-900">{toTiming?.arrivalTime || 'TBD'}</p>
+                <p className="text-sm font-semibold text-gray-700">{displayToName}</p>
+                <p className="text-lg font-bold text-gray-900">{displayToTime}</p>
               </div>
             </div>
           </div>
@@ -135,11 +151,13 @@ const BusCard = ({ result, compact = false }: BusCardProps) => {
                 {/* Stops List */}
                 <div className="space-y-4">
                   {bus.route.map((stop: any, idx: number) => {
-                    const stopName = typeof stop === 'string' ? stop : stop?.name || stop?.stopName || stop?.stop || 'Unknown';
+                    const stopName = extractStopNameFromRouteItem(stop) || 'Unknown';
                     const isFirst = idx === 0;
                     const isLast = idx === bus.route.length - 1;
-                    const isFromStop = stopName.toLowerCase().includes(fromTiming.stopName.toLowerCase()) || fromTiming.stopName.toLowerCase().includes(stopName.toLowerCase());
-                    const isToStop = stopName.toLowerCase().includes(toTiming.stopName.toLowerCase()) || toTiming.stopName.toLowerCase().includes(stopName.toLowerCase());
+                    const fromCmp = (fromTiming?.stopName || displayFromName).toLowerCase();
+                    const toCmp = (toTiming?.stopName || displayToName).toLowerCase();
+                    const isFromStop = stopName.toLowerCase().includes(fromCmp) || fromCmp.includes(stopName.toLowerCase());
+                    const isToStop = stopName.toLowerCase().includes(toCmp) || toCmp.includes(stopName.toLowerCase());
                     
                     return (
                       <div key={idx} className="flex items-center relative">
