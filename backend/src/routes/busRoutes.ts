@@ -54,6 +54,16 @@ router.get('/search', async (req: Request, res: Response) => {
     const defaultMinutes = now.getHours() * 60 + now.getMinutes();
     const requestedMinutes = parseTimeToMinutes(timeParam) ?? defaultMinutes;
 
+    // Helper to convert minutes-of-day to human-friendly time string
+    const minutesToTimeString = (mins: number) => {
+      const m = ((Math.round(mins) % 1440) + 1440) % 1440;
+      const h = Math.floor(m / 60);
+      const mm = m % 60;
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      const hh = ((h % 12) === 0) ? 12 : (h % 12);
+      return `${hh}:${String(mm).padStart(2, '0')} ${ampm}`;
+    };
+
     // Fetch all buses
     const busesSnapshot = await db.collection('buses').get();
     console.log(`Total buses in DB: ${busesSnapshot.size}`);
@@ -159,21 +169,34 @@ router.get('/search', async (req: Request, res: Response) => {
           if (matchFrom && matchTo) usedProvidedTimings = true;
         }
 
-        // Fallback to mock timings if not available
+        // Fallback to provided or estimated timings
+        const minutesToTimeString = (mins: number) => {
+          const m = ((Math.round(mins) % 1440) + 1440) % 1440;
+          const h = Math.floor(m / 60);
+          const mm = m % 60;
+          const ampm = h >= 12 ? 'PM' : 'AM';
+          const hh = ((h % 12) === 0) ? 12 : (h % 12);
+          return `${hh}:${String(mm).padStart(2, '0')} ${ampm}`;
+        };
+
         if (!fromTiming) {
+          // If no provided timing, estimate using requested time as the from departure
+          const dep = requestedMinutes;
           fromTiming = {
             stopId: `stop_${aIndex}`,
             stopName: fromStopName,
-            arrivalTime: '08:00 AM',
-            departureTime: '08:05 AM',
+            arrivalTime: minutesToTimeString(dep),
+            departureTime: minutesToTimeString(dep + 5),
           };
         }
         if (!toTiming) {
+          // Estimate arrival at destination as requested + estimatedTime
+          const arr = requestedMinutes + (typeof estimatedTime === 'number' ? estimatedTime : 0);
           toTiming = {
             stopId: `stop_${bIndex}`,
             stopName: toStopName,
-            arrivalTime: '10:30 AM',
-            departureTime: '10:35 AM',
+            arrivalTime: minutesToTimeString(arr),
+            departureTime: minutesToTimeString(arr + 5),
           };
         }
 
@@ -182,13 +205,33 @@ router.get('/search', async (req: Request, res: Response) => {
         const departMinutes = parseTimeField(fromTiming.departureTime) ?? parseTimeField(fromTiming.arrivalTime) ?? null;
 
         const timingSource = usedProvidedTimings ? 'provided' : 'estimated';
-        const resultObj = { bus, fromTiming, toTiming, distance, estimatedTime, fare, timingSource };
+        const resultObj = {
+          bus,
+          fromTiming,
+          toTiming,
+          distance,
+          estimatedTime,
+          fare,
+          timingSource,
+          // Echo the user's query so frontend can display what was searched
+          requestedFrom: (from as string) || '',
+          requestedTo: (to as string) || '',
+          requestedTime: minutesToTimeString(requestedMinutes),
+        };
+
+        // Ensure we always have a textual departure/arrival time on the result (avoid TBD in UI)
+        if (!fromTiming.departureTime && fromTiming.arrivalTime) {
+          fromTiming.departureTime = fromTiming.arrivalTime;
+        }
+        if (!toTiming.arrivalTime && toTiming.departureTime) {
+          toTiming.arrivalTime = toTiming.departureTime;
+        }
 
         if (departMinutes !== null) {
           const diff = departMinutes - requestedMinutes; // positive => after requested
           timeCandidates.push({ result: resultObj, departMinutes, absDiff: Math.abs(diff) });
         } else {
-          // No concrete timing for this bus; push to results as fallback
+          // No concrete timing for this bus; still push to results as fallback but make sure times exist
           results.push(resultObj);
         }
         continue; // matched by route, continue to next bus
@@ -230,7 +273,17 @@ router.get('/search', async (req: Request, res: Response) => {
         const estimatedTime = calculateTime(distance);
         const fare = calculateFare(distance, bus.type);
 
-        results.push({ bus, fromTiming, toTiming, distance, estimatedTime, fare });
+        results.push({
+          bus,
+          fromTiming,
+          toTiming,
+          distance,
+          estimatedTime,
+          fare,
+          requestedFrom: (from as string) || '',
+          requestedTo: (to as string) || '',
+          requestedTime: minutesToTimeString(requestedMinutes),
+        });
         continue;
       }
       console.log(`  ❌ No match for this bus`);
@@ -239,7 +292,7 @@ router.get('/search', async (req: Request, res: Response) => {
     console.log(`\n=== SEARCH END === Found ${results.length} result(s)\n`);
 
     // If we collected time candidates, prefer buses at/after requested time, otherwise show nearest
-    if (timeCandidates.length > 0) {
+      if (timeCandidates.length > 0) {
       if (showAll) {
         // Return all directional matches sorted by departure time (earliest first)
         const withDepart = timeCandidates
@@ -256,6 +309,44 @@ router.get('/search', async (req: Request, res: Response) => {
           return true;
         });
         console.log(`\n=== SEARCH END === Returning ${deduped.length} time-filtered (showAll) result(s)\n`);
+        return res.json({ success: true, data: deduped, count: deduped.length });
+      }
+      // If timeCandidates exist and not showing all, prefer the top 3 closest by time
+      if (timeCandidates.length > 0 && !showAll) {
+        // Annotate diffs and pick at-or-after first, otherwise nearest by absDiff
+        const annotated = timeCandidates.map(tc => {
+          const diff = (tc.departMinutes ?? 0) - requestedMinutes;
+          return { ...tc, diff };
+        });
+        const atOrAfter = annotated.filter(a => a.diff >= 0).sort((x, y) => x.diff - y.diff);
+        let chosen: any[] = [];
+        if (atOrAfter.length > 0) {
+          chosen = atOrAfter.map(a => a.result).slice(0, 3);
+        } else {
+          // No future buses — pick nearest by absolute diff
+          const nearest = annotated.sort((x, y) => x.absDiff! - y.absDiff!).slice(0, 3);
+          chosen = nearest.map(n => n.result);
+        }
+
+        // Merge chosen with any fallback results we added earlier (no timing), keeping chosen first
+        const merged = [...chosen, ...results];
+        // Deduplicate by bus id
+        const seen = new Set();
+        const deduped = merged.filter(r => {
+          const id = r.bus?.id || JSON.stringify(r.bus);
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        }).slice(0, 3); // return top-3 overall
+
+        console.log(`\n=== SEARCH END === Returning ${deduped.length} time-filtered (top-3) result(s)\n`);
+        // Detailed debug: print chosen buses and their departure minutes (if available)
+        for (const r of deduped) {
+          const id = r.bus?.id || JSON.stringify(r.bus);
+          const candidate = timeCandidates.find(tc => (tc.result.bus?.id || JSON.stringify(tc.result.bus)) === id);
+          const departMin = candidate?.departMinutes;
+          console.log(`  -> Bus: ${r.bus?.busName || id} id=${id} departMinutes=${departMin ?? 'N/A'} departTime=${departMin != null ? minutesToTimeString(departMin) : 'N/A'}`);
+        }
         return res.json({ success: true, data: deduped, count: deduped.length });
       }
       // Attach diff (depart - requested) and sort

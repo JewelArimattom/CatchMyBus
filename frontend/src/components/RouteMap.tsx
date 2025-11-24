@@ -98,10 +98,16 @@ const RouteMap = ({ from, to, results }: RouteMapProps) => {
       // Build route points from first result if available
       if (results.length > 0 && results[0].bus.route) {
         const points: { lat: number; lng: number }[] = [];
+        const extractStopNameFromRouteItem = (item: any) => {
+          if (!item && item !== 0) return '';
+          if (typeof item === 'string') return item;
+          return item?.name || item?.stopName || item?.stop || '';
+        };
+
         // Cast each stop to `any` to avoid strict typing issues when stop entries have mixed shapes
         for (const stopRaw of results[0].bus.route as any[]) {
-          const stop: any = stopRaw;
-          const stopName = typeof stop === 'string' ? stop : (stop?.name || stop?.stopName || stop?.stop || '');
+          const stopName = extractStopNameFromRouteItem(stopRaw).trim();
+          if (!stopName) continue;
           const coords = await geocodeLocation(stopName);
           if (coords) {
             points.push(coords);
@@ -145,9 +151,14 @@ const RouteMap = ({ from, to, results }: RouteMapProps) => {
         </h3>
         <p className="text-sm opacity-90">{from} → {to}</p>
         {results.length > 0 && (
-          <p className="text-xs opacity-80 mt-1">
-            Showing route for {results[0].bus.busName} ({results[0].bus.busNumber})
-          </p>
+          <>
+            <p className="text-xs opacity-80 mt-1">
+              Showing route for {results[0].bus.busName} ({results[0].bus.busNumber})
+            </p>
+            {results[0].requestedTime && (
+              <p className="text-xs opacity-80 mt-1">Requested time: {results[0].requestedTime}</p>
+            )}
+          </>
         )}
       </div>
       <div style={{ height: '500px', width: '100%' }}>

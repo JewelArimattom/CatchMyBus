@@ -32,6 +32,7 @@ const AdminPage = () => {
   const [stopTimings, setStopTimings] = useState<StopTiming[]>([
     { stopName: '', arrivalTime: '', period: 'AM' }
   ]);
+  const [pasteStopsText, setPasteStopsText] = useState('');
   
   const [allBuses, setAllBuses] = useState<BusData[]>([]);
   const [editingBus, setEditingBus] = useState<BusData | null>(null);
@@ -79,6 +80,7 @@ const AdminPage = () => {
       type: bus.type,
     });
     setStopTimings(parsedTimings);
+    setPasteStopsText('');
   };
 
   const handleUpdateBus = async (e: React.FormEvent) => {
@@ -111,6 +113,7 @@ const AdminPage = () => {
       setEditingBus(null);
       setBusForm({ busName: '', from: '', via: '', to: '', type: 'KSRTC' });
       setStopTimings([{ stopName: '', arrivalTime: '', period: 'AM' }]);
+      setPasteStopsText('');
       fetchAllBuses();
     } catch (error: any) {
       console.error('Error updating bus:', error);
@@ -137,6 +140,7 @@ const AdminPage = () => {
     setEditingBus(null);
     setBusForm({ busName: '', from: '', via: '', to: '', type: 'KSRTC' });
     setStopTimings([{ stopName: '', arrivalTime: '', period: 'AM' }]);
+    setPasteStopsText('');
   };
 
   // Filter buses based on search query
@@ -153,6 +157,18 @@ const AdminPage = () => {
 
   const addStopTimingField = () => {
     setStopTimings([...stopTimings, { stopName: '', arrivalTime: '', period: 'AM' }]);
+  };
+
+  const importPastedStops = (replace = true) => {
+    if (!pasteStopsText || !pasteStopsText.trim()) return;
+    // Split on commas, newlines, semicolons
+    const parts = pasteStopsText.split(/[,;\n\r]+/).map(s => s.trim()).filter(Boolean);
+    if (parts.length === 0) return;
+
+    const newRows: StopTiming[] = parts.map(p => ({ stopName: p, arrivalTime: '', period: 'AM' }));
+    if (replace) setStopTimings(newRows);
+    else setStopTimings([...stopTimings, ...newRows]);
+    setPasteStopsText('');
   };
 
   const removeStopTimingField = (index: number) => {
@@ -204,6 +220,7 @@ const AdminPage = () => {
       toast.success('Bus added successfully!');
       setBusForm({ busName: '', from: '', via: '', to: '', type: 'KSRTC' });
       setStopTimings([{ stopName: '', arrivalTime: '', period: 'AM' }]);
+        setPasteStopsText('');
     } catch (error: any) {
       console.error('❌ Error adding bus:', error);
       console.error('Error details:', {
@@ -358,6 +375,20 @@ const AdminPage = () => {
                   Stops and Timings *
                 </label>
                 
+                <div className="mb-3">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Paste stops (comma / newline separated)</label>
+                  <div className="flex gap-2">
+                    <input
+                      value={pasteStopsText}
+                      onChange={(e) => setPasteStopsText(e.target.value)}
+                      placeholder="e.g., Pala, Pravithanam, Kollapally"
+                      className="input-field flex-1"
+                    />
+                    <button type="button" onClick={() => importPastedStops(true)} className="btn-primary px-3">Import</button>
+                    <button type="button" onClick={() => importPastedStops(false)} className="px-3 bg-gray-100 rounded-lg">Append</button>
+                  </div>
+                </div>
+
                 <div className="space-y-3">
                   {stopTimings.map((stopTiming, index) => (
                     <div key={index} className="flex gap-3 items-start">
@@ -535,6 +566,20 @@ const AdminPage = () => {
                       Stops and Timings *
                     </label>
                     
+                    <div className="mb-3">
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Paste stops (comma / newline separated)</label>
+                      <div className="flex gap-2">
+                        <input
+                          value={pasteStopsText}
+                          onChange={(e) => setPasteStopsText(e.target.value)}
+                          placeholder="e.g., Pala, Pravithanam, Kollapally"
+                          className="input-field flex-1"
+                        />
+                        <button type="button" onClick={() => importPastedStops(true)} className="btn-primary px-3">Import</button>
+                        <button type="button" onClick={() => importPastedStops(false)} className="px-3 bg-gray-100 rounded-lg">Append</button>
+                      </div>
+                    </div>
+
                     <div className="space-y-3">
                       {stopTimings.map((stopTiming, index) => (
                         <div key={index} className="flex gap-3 items-start">
